@@ -1,0 +1,65 @@
+name: Validate determinant calculations
+
+on:
+  push:
+    branches: [ master, '**-test' ]
+  pull_request:
+
+jobs:
+  run_pytest:
+    strategy:
+      matrix:
+        os: [windows-latest]
+        python-version: ['3.11', '3.8']
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: "${{ matrix.python-version }}"
+
+    - name: Install minimal requirements (numpy and pytest)
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pytest numpy
+
+    - name: Run PyTest
+      run: pytest --capture=tee-sys
+
+  pip_install:
+    env:
+      # To install this exact version
+      PIP_NAME: "git+https://github.com/${{ github.repository }}@${{ github.sha }}"
+
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        # Arbitrary python version
+        python-version: '3.11'
+
+    - name: Install module from GitHub (${{ env.PIP_NAME }})
+      run: python -m pip install "${{ env.PIP_NAME }}"
+
+    - name: Simple functionality test
+      shell: python
+      run: |
+        import numpy as np
+        import numpy_determinant
+
+        # Some linearly dependent data
+        a = np.arange(9).reshape(3, 3)
+        # Increase all elements, but the first one
+        a += a != 0
+        print('Source data:', a)
+
+        det = numpy_determinant.det(a)
+        print('Determinant:', det)
+        np.testing.assert_equal(det, 3., err_msg='Incorrect determinant result')
