@@ -17,6 +17,13 @@ MAX_DET_SIZE = 3
 
 ASSERT_LEVEL = 1
 
+# Precalculated permutations to avoid 'itertools' for small sizes
+PRECALC_PERMS = list(np.array(vals, np.int8) for vals in (
+        [[]],               # size=0
+        [[0]],              # size=1
+        [[0, 1], [1, 0]],   # size=2
+    ))
+
 def _ref_perm_parity(perm_idxs: np.array) -> np.array:
     """Obtain the parity of permulations from the number of inversions
 
@@ -49,6 +56,8 @@ def permutation_parity(perm_idxs: np.array) -> np.array:
 
 def permutations_indices(size: int) -> np.array:
     """Obtain all permulations for specific number range"""
+    if size < len(PRECALC_PERMS):
+        return PRECALC_PERMS[size]
     # Use int8 as allocation of more than "factorial(128)" elements is impossible anyway
     return np.fromiter(itertools.permutations(range(size)),
             dtype=(np.int8, [size]))
@@ -72,6 +81,10 @@ def combinations_masks(size: int, comb_size: int) -> np.array:
     """Obtain all combinations for specific number range
 
     Note: The returned mask can be inverted to get the remainder from combination"""
+    if comb_size == 1:
+        return np.identity(size, dtype=bool)
+    if comb_size == size - 1:
+        return ~np.identity(size, dtype=bool)[::-1]
     idxs = np.fromiter(itertools.combinations(range(size), comb_size),
             dtype=(np.int8, [comb_size]))
     masks = np.zeros(shape=(idxs.shape[0], size), dtype=bool)
