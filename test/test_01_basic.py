@@ -136,6 +136,11 @@ def test_range_size():
         ref_res = np.round(np.linalg.det(data))
         assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
         res = determinant.det(data)
+        ###HACK: Test the experimental 'row-crawl' method
+        if data.size:
+            import experiment
+            res = experiment.row_crawl(data)
+        ####
         np.testing.assert_equal(res, ref_res, err_msg='Determinant value does not the match reference')
 
 #
