@@ -40,7 +40,18 @@ def _ref_perm_parity(perm_idxs: np.array) -> np.array:
     return odd_mask
 
 def permutation_parity(perm_idxs: np.array) -> np.array:
-    """Obtain the parity of permulations from the number of inversions"""
+    """Obtain the parity of permulations from the number of inversions
+
+    Parameters
+    ----------
+    perm_idxs : (..., N) array_like
+        Array of permulations represented as indices, individual permulations are in the last dimension
+
+    Returns
+    -------
+    odd_mask : (...) array_like
+        Array of booleans for each permulation, value is 'True' where the parity is odd
+    """
     # Indices of 'perm_idxs' elements, to calculate inversions/parity at once:
     # the combinations of their number over 2
     idxs = np.fromiter(itertools.combinations(range(perm_idxs.shape[-1]), 2), dtype=(int, 2))
@@ -51,7 +62,7 @@ def permutation_parity(perm_idxs: np.array) -> np.array:
 
     if ASSERT_LEVEL > 3:
         # Use a reference result
-        assert (odd_mask == _ref_perm_parity(perm_idxs)).all(), 'Wrong optimized permutation parity'
+        np.testing.assert_equal(odd_mask, _ref_perm_parity(perm_idxs), err_msg='Wrong optimized permutation parity')
     return odd_mask
 
 def permutations_indices(size: int) -> np.array:
@@ -62,19 +73,39 @@ def permutations_indices(size: int) -> np.array:
     return np.fromiter(itertools.permutations(range(size)),
             dtype=(np.int8, [size]))
 
-def combinations_parity(comb_mask) -> np.array:
-    """Obtain the parity of combinations from the number of inversions"""
-    odd_mask = np.logical_xor.accumulate(~comb_mask, axis=-1)
+def combinations_parity(comb_mask: np.array, rem_mask: np.array or None = None) -> np.array:
+    """Obtain the parity of combinations from the number of inversions
+
+    Parameters
+    ----------
+    comb_mask : (..., N) array_like
+        Array of combinations represented as mask, individual combinations are in the last dimension
+    rem_mask : (..., N) array_like, optional
+        Array of combination remainders to compare with. The number of inversions is the swaps between two
+        adjacent elements, in order to move all the `rem_mask` elements after `comb_mask`.
+        When `None`, the inverted `comb_mask` is used instead, which counts the swaps to move all `comb_mask`
+        elements in front.
+
+    Returns
+    -------
+    odd_mask : (...) array_like
+        Array of booleans for each combination, value is 'True' where the parity is odd
+    """
+    if rem_mask is None:
+        rem_mask = ~comb_mask
+    else:
+        comb_mask, rem_mask = np.broadcast_arrays(comb_mask, rem_mask)
+    odd_mask = np.logical_xor.accumulate(rem_mask, axis=-1)
     odd_mask[~comb_mask] = False
     odd_mask = np.logical_xor.reduce(odd_mask, axis=-1)
 
     if ASSERT_LEVEL > 3:
         # Combine permutation indices for the reference result
         combs = take_by_masks(np.arange(comb_mask.shape[-1]), comb_mask)
-        rems = take_by_masks(np.arange(comb_mask.shape[-1]), ~comb_mask)
+        rems = take_by_masks(np.arange(comb_mask.shape[-1]), rem_mask)
         perm = np.concatenate((combs, rems), axis=-1)
         # Use a reference result
-        assert (odd_mask == _ref_perm_parity(perm)).all(), 'Wrong optimized combinations parity'
+        np.testing.assert_equal(odd_mask, _ref_perm_parity(perm), err_msg='Wrong optimized combinations parity')
     return odd_mask
 
 def combinations_masks(size: int, comb_size: int) -> np.array:
@@ -93,9 +124,10 @@ def combinations_masks(size: int, comb_size: int) -> np.array:
 
 def take_by_masks(data: np.array, masks: np.array):
     """Extract elements by masking the last dimension, keeping the mask's shape"""
-    # Broadcast the last dimension to match 'masks'
-    data = np.broadcast_to(data[...,np.newaxis,:],
-            shape=data.shape[:-1] + masks.shape)
+    # Expand/broadcast the last dimension to match 'masks'
+    shape = list(data.shape)
+    shape[-1:-1] = (1,)*(masks.ndim - 1)
+    data = np.broadcast_to(data.reshape(shape), shape=data.shape[:-1] + masks.shape)
     # The reshape() below expects, the masking to extract
     # equal number of elements from each row
     if ASSERT_LEVEL > 1:

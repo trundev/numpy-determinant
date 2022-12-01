@@ -143,6 +143,38 @@ def test_det_of_columns():
     np.testing.assert_equal(res, ref_res, err_msg='Determinant value does not the match reference')
     print(f'  number of take_data() calls: {take_data_cnt} for {take_data_vals} vals')
 
+def test_polynomials():
+    """Extensive test using numpy.polynomial.Polynomial as data-type"""
+    print('\n* Array of numpy.polynomial.Polynomial-s')
+    # Select coefficients for matrix of polynomials
+    # Reference data as 1-st coefficient for each polynomial, 0-th is one: "1 + <n>*x"
+    coefs = np.stack(np.broadcast_arrays(1, MATRIX_DET_3), axis=-1)
+    data = np.apply_along_axis(np.polynomial.Polynomial, -1, coefs)
+    print(f'Single 3x3 matrix (data-type {type(data.flat[0])}):')
+    print(np.vectorize(str)(data))
+    res = determinant.det(data)
+    assert isinstance(res, np.polynomial.Polynomial), 'Determiant data-type was changed'
+    np.testing.assert_equal(res, np.polynomial.Polynomial([0,0,0,3]), err_msg='Unexpected polynomial result')
+
+    # 21 4x4 matrices with non-zero determinants
+    degree = 4
+    data = np.arange(3*7*degree*degree).reshape(3, 7, degree, degree)
+    data.flat[::5] = 1
+    print(f'Mutiple {data.shape[:-2]}, 4x4 matrices (data-type {type(data.flat[0])})')
+    # Get reference result, ensure it is exact by rounding
+    ref_res = np.round(np.linalg.det(data))
+    assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
+    # The expected polynomials will be of 4-th degree
+    coefs = np.stack(np.broadcast_arrays( *(0,)*degree, ref_res), axis=-1)
+    ref_res = np.apply_along_axis(np.polynomial.Polynomial, -1, coefs)
+
+    # Select coefficients for matrix of 1-st degree polynomials
+    coefs = np.stack(np.broadcast_arrays(0, data), axis=-1)
+    data = np.apply_along_axis(np.polynomial.Polynomial, -1, coefs)
+    res = determinant.det(data)
+    assert isinstance(res.flat[0], np.polynomial.Polynomial), 'Determiant data-type was changed'
+    np.testing.assert_equal(res, ref_res, err_msg='Unexpected polynomial result')
+
 #
 # For non-pytest debugging
 #
@@ -151,5 +183,8 @@ if __name__ == '__main__':
     if res:
         sys.exit(res)
     res = test_det_of_columns()
+    if res:
+        sys.exit(res)
+    res = test_polynomials()
     if res:
         sys.exit(res)
