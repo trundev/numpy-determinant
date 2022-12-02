@@ -41,10 +41,10 @@ def row_crawl(data, num_rows=None, row_step=1):
         return determinant.det_of_columns(take_data, idxs, row_base)
 
     # Get the initial minors to build on top of - left-side minors
-    comb_masks = determinant.combinations_masks(data.shape[-1], row_step)
-    minors = minors_of_masks(comb_masks, 0)
+    comb_masks = np.zeros(data.shape[-1], dtype=bool)
+    minors = np.empty(shape=0)
 
-    for row in range(row_step, num_rows, row_step):
+    for row in range(0, num_rows, row_step):
         # Keep 'row_step' in boundaries
         if row_step > num_rows - row:
             row_step = num_rows - row
@@ -55,7 +55,8 @@ def row_crawl(data, num_rows=None, row_step=1):
                 err_msg='Combined mask does not match the row-number')
         # New combinations, based on the remainders from current ones
         masks = determinant.combinations_masks(data.shape[-1] - row, row_step)
-        masks = np.broadcast_to(masks[np.newaxis,...], minors.shape[-1:] + masks.shape)
+        if minors.size:
+            masks = np.broadcast_to(masks[np.newaxis,...], minors.shape[-1:] + masks.shape)
 
         # Masks for the right-side elements:
         # the new combinations spread over the current remainders
@@ -68,7 +69,10 @@ def row_crawl(data, num_rows=None, row_step=1):
 
         # Calculate the new minors
         r_minors = minors_of_masks(r_masks, row)
-        minors = (minors[...,np.newaxis] * r_minors).reshape(*minors.shape[:-1], -1)
+        if minors.size:
+            minors = (minors[...,np.newaxis] * r_minors).reshape(*minors.shape[:-1], -1)
+        else:
+            minors = r_minors
 
         # Calculate the new combination masks and parity
         comb_masks = comb_masks[...,np.newaxis,:]
