@@ -21,6 +21,46 @@ def bits_to_mask(bits: np.array, width: int) -> np.array:
     res = bits[..., np.newaxis] & 1<<np.arange(width, dtype=bits.dtype)
     return res != 0
 
+def combinations_to_indices(comb_masks: np.array) -> np.array:
+    """Convert combination mask to unique index"""
+    comb_sizes = comb_masks.sum(-1) - 1
+    indices = np.zeros(shape=comb_masks.shape[:-1], dtype=int)
+    comb_vectorized = np.vectorize(np.math.comb)    # np.frompyfunc(np.math.comb, 2, 1)
+    for idx in range(comb_masks.shape[-1]):
+        masks = comb_masks[...,idx]
+        comb_sizes[masks] -= 1
+        masks = ~masks & (comb_sizes >= 0)
+        if masks.any():
+            indices[masks] += comb_vectorized(comb_masks.shape[-1] - idx - 1, comb_sizes[masks])
+    return indices
+
+def combinations_from_indices(indices: np.array, size: int, comb_size: int or np.array) -> np.array:
+    """Convert combination unique index to mask"""
+    indices, comb_size = np.broadcast_arrays(indices, comb_size - 1)
+    indices = indices.copy()
+    comb_size = comb_size.copy()
+    comb_masks = np.zeros(shape=indices.shape + (size,), dtype=bool)
+    comb_vectorized = np.vectorize(np.math.comb)
+    val_masks = comb_size >= 0      # Elements, that are being processed
+    for idx in range(size):
+        # Drop elements where 'comb_size' is exhausted
+        masks = comb_size >= 0
+        if not masks.all():
+            val_masks[val_masks] = masks
+            comb_size = comb_size[masks]
+            indices = indices[masks]
+
+        split_idx = comb_vectorized(size - idx - 1, comb_size)
+        masks = indices < split_idx
+        comb_masks[...,idx][val_masks] = masks
+        comb_size[masks] -= 1
+        masks = ~masks
+        indices[masks] -= split_idx[masks]
+
+    if determinant.ASSERT_LEVEL > 1:
+        np.testing.assert_equal(comb_size, -1, err_msg='Unprocessed combinations left')
+    return comb_masks
+
 def row_crawl(data, num_rows=None, row_step=1):
     #NOTE: 'row_step' higher than 1 not yet supported
     if num_rows is None:
@@ -51,8 +91,9 @@ def row_crawl(data, num_rows=None, row_step=1):
         print(f'{row=}, {row_step=}:')
         print(f'  {minors.shape=}')
 
-        np.testing.assert_equal(comb_masks.sum(-1), row,
-                err_msg='Combined mask does not match the row-number')
+        if determinant.ASSERT_LEVEL > 1:
+            np.testing.assert_equal(comb_masks.sum(-1), row,
+                    err_msg='Combined mask does not match the row-number')
         # New combinations, based on the remainders from current ones
         masks = determinant.combinations_masks(data.shape[-1] - row, row_step)
         if minors.size:
@@ -64,8 +105,10 @@ def row_crawl(data, num_rows=None, row_step=1):
         # Extra pre-last dimension for each right-side combination
         r_masks = np.stack((r_masks,) * masks.shape[-2], axis=-2)
         r_masks[r_masks] = masks.flat
-        np.testing.assert_equal(r_masks.sum(-1), row_step,
-                err_msg='Combined mask does not match next minors')
+        if determinant.ASSERT_LEVEL > 2:
+            np.testing.assert_equal(r_masks.sum(-1), row_step,
+                    err_msg='Combined mask does not match next minors')
+        del masks
 
         # Calculate the new minors
         r_minors = minors_of_masks(r_masks, row)
@@ -78,27 +121,31 @@ def row_crawl(data, num_rows=None, row_step=1):
         comb_masks = comb_masks[...,np.newaxis,:]
         odd_masks = determinant.combinations_parity(comb_masks, r_masks).flatten()
         comb_masks = (comb_masks | r_masks).reshape(-1, comb_masks.shape[-1])
-        np.testing.assert_equal(comb_masks.sum(-1), row + row_step,
-                err_msg='Combined mask does not match combined minors')
+        if determinant.ASSERT_LEVEL > 2:
+            np.testing.assert_equal(comb_masks.sum(-1), row + row_step,
+                    err_msg='Combined mask does not match combined minors')
         print(f'  After cross-multiplication: {minors.shape=} - [expected increase by x{np.math.comb(data.shape[-1] - row, row_step)}')
 
-        # Get the new combinations and where the current ones are duplicated (identify overlaps)
-        new_comb_masks = determinant.combinations_masks(data.shape[-1], row + row_step)
-        masks = (comb_masks == new_comb_masks[...,np.newaxis,:]).all(-1)
+        # Build remap-xform matrix to sum the duplicate combinations (identify overlaps)
+        comb_idxs = combinations_to_indices(comb_masks)
         expected_dups = np.math.comb(row + row_step, row_step)
-        np.testing.assert_equal(masks.sum(-1), expected_dups,
-                err_msg='Unexpected number of repeated combinations')
-        np.testing.assert_equal(masks.sum(-2), 1,
-                err_msg='Duplicate matches, "new_comb_masks" elements may not be unique')
-        comb_masks = new_comb_masks
+        remap_idxs = np.argsort(comb_idxs).reshape(-1, expected_dups)
+        del comb_idxs
+
+        # Drop the duplicated combimations - the remap places them in the pre-last dimension
+        if determinant.ASSERT_LEVEL > 3:
+            np.testing.assert_equal(comb_masks[remap_idxs[...,1:]], comb_masks[remap_idxs[...,:-1]],
+                    err_msg='Unable to isolate "comb_masks" duplicates')
+        comb_masks = comb_masks[remap_idxs[...,0]]
 
         # Sum the minors along the columns where the current combinations overlap
-        minors = determinant.take_by_masks(minors, masks)
-        odd_masks = determinant.take_by_masks(odd_masks, masks)
+        minors = minors[remap_idxs]
+        odd_masks = odd_masks[remap_idxs]
         minors = determinant.det_sum_simple(minors, odd_masks)
+        del odd_masks, remap_idxs
 
         print(f'  After reduce-summation: {minors.shape=} - [expected decrease by /{expected_dups}]')
-        print(f'     {minors}')
+        #print(f'     {minors}')
 
     print(f'Finally: {minors.shape=}')
     return minors
@@ -167,12 +214,22 @@ def experiment(src_data, minor_size):
 # Main
 #
 if __name__ == '__main__':
-    # Test bit-masks
-    mask = determinant.combinations_masks(5, 2)
-    bits = mask_to_bits(mask)
-    print('\n'.join(f'  {m}:  {b:08X}' for m,b in zip(mask, bits)))
-    np.testing.assert_array_equal(bits_to_mask(bits, mask.shape[-1]), mask), 'Convert-back failed'
-    del mask, bits
+    # Test bit-masks from combination
+    for size in range(1, 10):
+        for comb_size in range(1, size):
+            print(f'* size: {size}, comb_size: {comb_size}, total {np.math.comb(size, comb_size)}')
+            print(f'Testing combinations vs. bits conversion')
+            mask = determinant.combinations_masks(size, comb_size)
+            bits = mask_to_bits(mask)
+            print('\n'.join(f'  {m}:  {b:08X}' for m,b in zip(mask, bits)))
+            np.testing.assert_array_equal(bits_to_mask(bits, mask.shape[-1]), mask), 'Convert-back failed'
+
+            # Test combinaiton indices
+            print(f'Testing combinations vs. indices conversion')
+            idxs = combinations_to_indices(mask)
+            mask_back = combinations_from_indices(idxs, mask.shape[-1], mask.sum(-1) if size % 2 else comb_size)
+            np.testing.assert_equal(mask_back, mask, err_msg='Conbinations to/from indices conversion failed')
+            del mask, bits, mask_back
 
     total_size = 5
     minor_size = 2
