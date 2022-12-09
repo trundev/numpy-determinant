@@ -122,6 +122,54 @@ def combinations_masks(size: int, comb_size: int) -> np.array:
     masks[np.arange(idxs.shape[0])[...,np.newaxis], idxs] = True
     return masks
 
+def combinations_to_indices(comb_masks: np.array) -> np.array:
+    """Convert combination mask to unique index"""
+    comb_sizes = comb_masks.sum(-1) - 1
+    indices = np.zeros(shape=comb_masks.shape[:-1], dtype=int)
+    comb_vectorized = np.vectorize(np.math.comb, otypes=indices.dtype.char)
+    for idx in range(comb_masks.shape[-1]):
+        masks = comb_masks[...,idx]
+        comb_sizes[masks] -= 1
+        masks = ~masks & (comb_sizes >= 0)
+        if masks.any():
+            indices[masks] += comb_vectorized(comb_masks.shape[-1] - idx - 1, comb_sizes[masks])
+
+    if ASSERT_LEVEL > 3:
+        np.testing.assert_equal(combinations_from_indices(indices, comb_masks.shape[-1], comb_masks.sum(-1)), comb_masks,
+            err_msg='Combinations to indices conversion is irreversible')
+    return indices
+
+def combinations_from_indices(indices: np.array, size: int, comb_size: int or np.array) -> np.array:
+    """Convert combination unique index to mask"""
+    indices, comb_size = np.broadcast_arrays(indices, comb_size - 1)
+    indices = indices.copy()
+    comb_size = comb_size.copy()
+    comb_masks = np.zeros(shape=indices.shape + (size,), dtype=bool)
+    comb_vectorized = np.vectorize(np.math.comb, otypes=comb_size.dtype.char)
+    val_masks = comb_size >= 0      # Elements, that are being processed
+    comb_size = comb_size[val_masks]
+    indices = indices[val_masks]
+    for idx in range(size):
+        # Drop elements where 'comb_size' is exhausted
+        masks = comb_size >= 0
+        if not masks.any():
+            break   # All elements are processed
+        if not masks.all():
+            val_masks[val_masks] = masks
+            comb_size = comb_size[masks]
+            indices = indices[masks]
+
+        split_idx = comb_vectorized(size - idx - 1, comb_size)
+        masks = indices < split_idx
+        comb_masks[...,idx][val_masks] = masks
+        comb_size[masks] -= 1
+        masks = ~masks
+        indices[masks] -= split_idx[masks]
+
+    if ASSERT_LEVEL > 1:
+        np.testing.assert_equal(comb_size, -1, err_msg='Unprocessed combinations left')
+    return comb_masks
+
 def take_by_masks(data: np.array, masks: np.array):
     """Extract elements by masking the last dimension, keeping the mask's shape"""
     # Expand/broadcast the last dimension to match 'masks'
@@ -247,19 +295,74 @@ def det_of_columns(take_data: callable, col_idxs: np.array, row_base: int, *,
         # Get the permutation parity
         odd_masks = permutation_parity(idxs)
         del idxs
-    else:
-        # Split each determinant into two minor-determinants (from sub-matrices):
-        # main (left-side) minor and remainder (right-size) minor
-        split = (col_idxs.shape[-1] + 1) // 2
-        minors, r_minors, odd_masks = det_minors_of_columns(take_data, col_idxs, row_base,
-                minor_size = split, left_only=False,
-                max_det_size=max_det_size, det_sum=det_sum)
-        # Apply determinant rule: products from sub-determinants
-        res = minors * r_minors
-        del minors, r_minors
 
-    # Apply determinant rule: sum the products by negating the odd-permutations
-    return det_sum(res, odd_masks)
+        # Apply determinant rule: sum the products by negating the odd-permutations
+        return det_sum(res, odd_masks)
+
+    # Split each determinant into multiple minor-determinants (from sub-matrices):
+
+    # Empty initial (left-side) minors to build on top of
+    num_rows = col_idxs.shape[-1]
+    comb_masks = np.zeros(num_rows, dtype=bool)
+    minors = np.empty(shape=0)
+    row_step = max_det_size
+    while row_base < num_rows:
+        # Optimization: simplified right-side masks selection for the final row(s)
+        if row_step < num_rows - row_base:
+            # Next combinations, based on the remainders from current ones
+            masks = combinations_masks(num_rows - row_base, row_step)
+            if minors.size:
+                masks = np.broadcast_to(masks[np.newaxis,...], minors.shape[-1:] + masks.shape)
+
+            # Masks for the right-side elements:
+            # the next combinations spread over the current remainders
+            r_masks = ~comb_masks
+            # Extra pre-last dimension for each right-side combination
+            r_masks = np.stack((r_masks,) * masks.shape[-2], axis=-2)
+            r_masks[r_masks] = masks.flat
+            del masks
+        else:
+            # Final row(s), right-side masks are just the left-overs
+            row_step = num_rows - row_base
+            r_masks = ~comb_masks[...,np.newaxis,:]
+
+        # Calculate the next minors
+        r_minors = det_of_columns(take_data, take_by_masks(col_idxs, r_masks),
+                row_base, max_det_size=max_det_size, det_sum=det_sum)
+        if minors.size:
+            minors = (minors[...,np.newaxis] * r_minors).reshape(minors.shape[:-1] + (-1,))
+        else:
+            minors = r_minors
+
+        # Calculate the next combination masks and parity
+        comb_masks = comb_masks[...,np.newaxis,:]
+        odd_masks = combinations_parity(comb_masks, r_masks).flatten()
+        comb_masks = (comb_masks | r_masks).reshape(-1, comb_masks.shape[-1])
+
+        # Build remap-xform matrix to sum the duplicate combinations (identify overlaps)
+        if not comb_masks.all():
+            comb_idxs = combinations_to_indices(comb_masks)
+            expected_dups = np.math.comb(row_base + row_step, row_step)
+            remap_idxs = np.argsort(comb_idxs).reshape(-1, expected_dups)
+            del comb_idxs
+        else:
+            # Final row(s), all combinations overlap
+            remap_idxs = np.arange(comb_masks.shape[-2])
+
+        # Drop the duplicated combimations - the remap places them in the pre-last dimension
+        if ASSERT_LEVEL > 3:
+            np.testing.assert_equal(comb_masks[remap_idxs[...,1:]], comb_masks[remap_idxs[...,:-1]],
+                    err_msg='Unable to isolate "comb_masks" duplicates')
+        comb_masks = comb_masks[remap_idxs[...,0]]
+
+        # Apply determinant rule: sum the products by negating the odd-permutations
+        minors = minors[...,remap_idxs]
+        odd_masks = odd_masks[remap_idxs]
+        minors = det_sum(minors, odd_masks)
+
+        row_base += row_step
+
+    return minors
 
 def det(data: np.array, *, max_det_size: int = MAX_DET_SIZE) -> np.array:
     """Compute the determinant of an array - our version of numpy.linalg.det()
