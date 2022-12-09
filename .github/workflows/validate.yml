@@ -28,7 +28,7 @@ jobs:
         pip install .[dev]
 
     - name: Run PyTest
-      run: pytest --capture=tee-sys
+      run: pytest --capture=tee-sys -m "not slow"
 
   pip_install:
     env:

@@ -16,3 +16,8 @@ dependencies = ["numpy"]
 [project.optional-dependencies]
 # Development deps, installed through `pip install .[dev]`
 dev = ["pytest"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

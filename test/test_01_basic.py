@@ -118,24 +118,28 @@ def test_det_minors():
     res = (res * data[...,-1,:]).sum(-1)
     np.testing.assert_equal(res, 0, err_msg='Non-zero determinant from linearly dependent vectors')
 
-def test_range_size():
+# Range the matrix sizes, start at empty one (0x0)
+@pytest.mark.parametrize('degree', (
+        size if size < 16 else pytest.param(size, marks=pytest.mark.slow)
+        for size in range(18 + 1)))
+def test_range_size(degree):
     """Test determinants from range of matrix sizes"""
-    print('\n* Determinants by increasing the matrix size')
-    max_degree = 10
-    # Combine some non-linearly dependent data (up-to 10x10)
-    # Keep values as small as possible, but still need 64-bit integers
-    src_data = np.ones(shape=max_degree*max_degree, dtype=np.int64)
-    src_data[::7] = np.array(PRIME_NUMBERS[:src_data[::7].size])
-    src_data[::5] = np.array(PRIME_NUMBERS[:src_data[::5].size])
+    print(f'\n* Determinant of matrix of {degree} degree')
 
-    # Range the matrix sizes, start at empty one (0x0)
-    for degree in range(max_degree + 1):
-        data = src_data[:degree*degree].reshape(degree, degree)
-        print(f'Matrix shape {data.shape}')
-        # The `numpy.linalg.det()` result is inexact, but since it must be integer,
-        # we can just round it to get the exact value
-        ref_res = np.round(np.linalg.det(data))
-        assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
-        res = determinant.det(data)
-        np.testing.assert_equal(res, ref_res,
-                                err_msg='Determinant value does not match the reference')
+    # Combine some non-linearly dependent data (up-to 29x29)
+    # Keep values as small as possible, but still need 64-bit integers
+    src_data = np.ones(shape=degree*degree, dtype=np.int64)
+    v = 1
+    for pn in PRIME_NUMBERS[1:6]:   # Five prime numbers after 2 (3-13)
+        src_data[::pn] += v
+        v = -v
+
+    data = src_data[:degree*degree].reshape(degree, degree)
+    print(f'Matrix shape {data.shape}')
+    # The `numpy.linalg.det()` result is inexact, but since it must be integer,
+    # we can just round it to get the exact value
+    ref_res = np.round(np.linalg.det(data))
+    assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
+    res = determinant.det(data)
+    np.testing.assert_equal(res, ref_res,
+                            err_msg='Determinant value does not match the reference')
