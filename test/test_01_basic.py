@@ -23,7 +23,7 @@ def test_det():
     assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
     res = determinant.det(data)
     assert res.dtype == data.dtype, 'Determiant data-type was changed'
-    np.testing.assert_equal(res, ref_res, err_msg='Determinant value does not the match reference')
+    np.testing.assert_equal(res, ref_res, err_msg='Determinant value does not match the reference')
 
     # Interleave all 25 prime-numbers with ones to get 3 5x5 matrices
     # Do not expect exact results as "numpy.linalg.det()"
@@ -33,7 +33,7 @@ def test_det():
     ref_res = np.linalg.det(data)
     assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
     res = determinant.det(data)
-    np.testing.assert_allclose(res, ref_res, err_msg='Determinant value(s) does not the match reference')
+    np.testing.assert_allclose(res, ref_res, err_msg='Determinant value(s) does not match the reference')
 
 def test_asserts():
     """Provoked failures"""
@@ -120,12 +120,14 @@ def test_det_minors():
 def test_range_size():
     """Test derivatives from range of matrix sizes"""
     print('\n* Derivatives by increasing the matrix size')
-    max_degree = 10
+    max_degree = 16
     # Combine some non-linearly dependent data (upto 10x10)
     # Keep values as small as possible, but still need 64-bit integers
     src_data = np.ones(shape=max_degree*max_degree, dtype=np.int64)
-    src_data[::7] = np.array(PRIME_NUMBERS[:src_data[::7].size])
-    src_data[::5] = np.array(PRIME_NUMBERS[:src_data[::5].size])
+    v = 1
+    for pn in PRIME_NUMBERS[1:6]:   # Five prime numbers after 2 (3-13)
+        src_data[::pn] += v
+        v = -v
 
     # Range the matrix sizes, start at empty one (0x0)
     for degree in range(max_degree + 1):
@@ -136,7 +138,7 @@ def test_range_size():
         ref_res = np.round(np.linalg.det(data))
         assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
         res = determinant.det(data)
-        np.testing.assert_equal(res, ref_res, err_msg='Determinant value does not the match reference')
+        np.testing.assert_equal(res, ref_res, err_msg='Determinant value does not match the reference')
 
 #
 # For non-pytest debugging
