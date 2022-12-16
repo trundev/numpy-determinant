@@ -119,6 +119,33 @@ class combination:
         odd_mask = np.logical_xor.reduce(odd_mask, axis=-1)
         return odd_mask
 
+    def remainder_combination(self, rem_size: int) -> object:
+        """Obtain the combinations that remains from current one
+
+        TODO:
+        """
+        # Optimization: simplified right-side masks selection for the final row(s)
+        comb_size = self.comb_size(collapse=True)
+        if comb_size + rem_size < self.size:
+            bool_mask = combination_bools(self.size - comb_size, rem_size).to_bool_mask()
+            # Masks for the right-side elements:
+            # the next combinations spread over the current remainders
+            r_masks = ~self.to_bool_mask()
+            if r_masks.ndim > 1:
+                bool_mask = np.broadcast_to(bool_mask[np.newaxis,...], r_masks.shape[:-1] + bool_mask.shape)
+            # Extra pre-last dimension for each right-side combination
+            r_masks = np.stack((r_masks,) * bool_mask.shape[-2], axis=-2)
+            r_masks[r_masks] = bool_mask.flat
+        else:
+            # Final row(s), right-side masks are just the left-overs
+            r_masks = ~self.to_bool_mask()[...,np.newaxis,:]
+        comb_masks = self.to_bool_mask()[...,np.newaxis,:]
+        return combination_bools.from_bool_mask(comb_masks), combination_bools.from_bool_mask(r_masks)
+
+    def merge(self, comb: object) -> object:
+        bool_mask = self.to_bool_mask() | comb.to_bool_mask()
+        return combination_bools.from_bool_mask(bool_mask)
+
 class combination_bools(combination):
     """Combinations storage for set as boolen-mask"""
     def __init__(self, size: int, comb_size: int):

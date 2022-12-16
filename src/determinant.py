@@ -5,8 +5,8 @@ The main goal is to work with NumPy array of any 'dtype', like:
   fractions, decimal, numbers, numpy.polynomial.Polynomial(), etc.
 The determinant.det() should work just like numpy.linalg.det(), with preserved 'dtype'.
 """
-import itertools
 import numpy as np
+import combinatorics
 
 
 # Limit the size of a determinants to be calculated at once, in order to:
@@ -19,159 +19,6 @@ ASSERT_LEVEL = 1
 
 # Try to avoid too large intermediate arrays
 ARR_THRESHOLD = int(50e6)
-
-# Precalculated permutations to avoid 'itertools' for small sizes
-PRECALC_PERMS = list(np.array(vals, np.int8) for vals in (
-        [[]],               # size=0
-        [[0]],              # size=1
-        [[0, 1], [1, 0]],   # size=2
-    ))
-
-def _ref_perm_parity(perm_idxs: np.array) -> np.array:
-    """Obtain the parity of permulations from the number of inversions
-
-    Uses nested for-loops, as a reference for pytests
-    See:
-        https://statlect.com/matrix-algebra/sign-of-a-permutation
-        https://en.wikipedia.org/wiki/Parity_of_a_permutation
-    """
-    odd_mask = False
-    # Plain nested for-loops implementation
-    for i in range(perm_idxs.shape[-1] - 1):
-        for j in range(i + 1, perm_idxs.shape[-1]):
-            odd_mask = odd_mask ^ (perm_idxs[..., i] > perm_idxs[..., j])
-    return odd_mask
-
-def permutation_parity(perm_idxs: np.array) -> np.array:
-    """Obtain the parity of permulations from the number of inversions
-
-    Parameters
-    ----------
-    perm_idxs : (..., N) array_like
-        Array of permulations represented as indices, individual permulations are in the last dimension
-
-    Returns
-    -------
-    odd_mask : (...) array_like
-        Array of booleans for each permulation, value is 'True' where the parity is odd
-    """
-    # Indices of 'perm_idxs' elements, to calculate inversions/parity at once:
-    # the combinations of their number over 2
-    idxs = np.fromiter(itertools.combinations(range(perm_idxs.shape[-1]), 2), dtype=(int, 2))
-
-    # Regroup permutation indices in couples to check for inversions
-    idxs = perm_idxs[...,idxs]
-    odd_mask = np.logical_xor.reduce(idxs[...,0] > idxs[...,1], axis=-1)
-
-    if ASSERT_LEVEL > 3:
-        # Use a reference result
-        np.testing.assert_equal(odd_mask, _ref_perm_parity(perm_idxs), err_msg='Wrong optimized permutation parity')
-    return odd_mask
-
-def permutations_indices(size: int) -> np.array:
-    """Obtain all permulations for specific number range"""
-    if size < len(PRECALC_PERMS):
-        return PRECALC_PERMS[size]
-    # Use int8 as allocation of more than "factorial(128)" elements is impossible anyway
-    return np.fromiter(itertools.permutations(range(size)),
-            dtype=(np.int8, [size]))
-
-def combinations_parity(comb_mask: np.array, rem_mask: np.array or None = None) -> np.array:
-    """Obtain the parity of combinations from the number of inversions
-
-    Parameters
-    ----------
-    comb_mask : (..., N) array_like
-        Array of combinations represented as mask, individual combinations are in the last dimension
-    rem_mask : (..., N) array_like, optional
-        Array of combination remainders to compare with. The number of inversions is the swaps between two
-        adjacent elements, in order to move all the `rem_mask` elements after `comb_mask`.
-        When `None`, the inverted `comb_mask` is used instead, which counts the swaps to move all `comb_mask`
-        elements in front.
-
-    Returns
-    -------
-    odd_mask : (...) array_like
-        Array of booleans for each combination, value is 'True' where the parity is odd
-    """
-    if rem_mask is None:
-        rem_mask = ~comb_mask
-    else:
-        comb_mask, rem_mask = np.broadcast_arrays(comb_mask, rem_mask)
-    odd_mask = np.logical_xor.accumulate(rem_mask, axis=-1)
-    odd_mask[~comb_mask] = False
-    odd_mask = np.logical_xor.reduce(odd_mask, axis=-1)
-
-    if ASSERT_LEVEL > 3:
-        # Combine permutation indices for the reference result
-        combs = take_by_masks(np.arange(comb_mask.shape[-1]), comb_mask)
-        rems = take_by_masks(np.arange(comb_mask.shape[-1]), rem_mask)
-        perm = np.concatenate((combs, rems), axis=-1)
-        # Use a reference result
-        np.testing.assert_equal(odd_mask, _ref_perm_parity(perm), err_msg='Wrong optimized combinations parity')
-    return odd_mask
-
-def combinations_masks(size: int, comb_size: int) -> np.array:
-    """Obtain all combinations for specific number range
-
-    Note: The returned mask can be inverted to get the remainder from combination"""
-    if comb_size == 1:
-        return np.identity(size, dtype=bool)
-    if comb_size == size - 1:
-        return ~np.identity(size, dtype=bool)[::-1]
-    idxs = np.fromiter(itertools.combinations(range(size), comb_size),
-            dtype=(np.int8, [comb_size]))
-    masks = np.zeros(shape=(idxs.shape[0], size), dtype=bool)
-    masks[np.arange(idxs.shape[0])[...,np.newaxis], idxs] = True
-    return masks
-
-def combinations_to_indices(comb_masks: np.array) -> np.array:
-    """Convert combination mask to unique index"""
-    comb_sizes = comb_masks.sum(-1) - 1
-    indices = np.zeros(shape=comb_masks.shape[:-1], dtype=int)
-    comb_vectorized = np.vectorize(np.math.comb, otypes=indices.dtype.char)
-    for idx in range(comb_masks.shape[-1]):
-        masks = comb_masks[...,idx]
-        comb_sizes[masks] -= 1
-        masks = ~masks & (comb_sizes >= 0)
-        if masks.any():
-            indices[masks] += comb_vectorized(comb_masks.shape[-1] - idx - 1, comb_sizes[masks])
-
-    if ASSERT_LEVEL > 3:
-        np.testing.assert_equal(combinations_from_indices(indices, comb_masks.shape[-1], comb_masks.sum(-1)), comb_masks,
-            err_msg='Combinations to indices conversion is irreversible')
-    return indices
-
-def combinations_from_indices(indices: np.array, size: int, comb_size: int or np.array) -> np.array:
-    """Convert combination unique index to mask"""
-    indices, comb_size = np.broadcast_arrays(indices, comb_size - 1)
-    indices = indices.copy()
-    comb_size = comb_size.copy()
-    comb_masks = np.zeros(shape=indices.shape + (size,), dtype=bool)
-    comb_vectorized = np.vectorize(np.math.comb, otypes=comb_size.dtype.char)
-    val_masks = comb_size >= 0      # Elements, that are being processed
-    comb_size = comb_size[val_masks]
-    indices = indices[val_masks]
-    for idx in range(size):
-        # Drop elements where 'comb_size' is exhausted
-        masks = comb_size >= 0
-        if not masks.any():
-            break   # All elements are processed
-        if not masks.all():
-            val_masks[val_masks] = masks
-            comb_size = comb_size[masks]
-            indices = indices[masks]
-
-        split_idx = comb_vectorized(size - idx - 1, comb_size)
-        masks = indices < split_idx
-        comb_masks[...,idx][val_masks] = masks
-        comb_size[masks] -= 1
-        masks = ~masks
-        indices[masks] -= split_idx[masks]
-
-    if ASSERT_LEVEL > 1:
-        np.testing.assert_equal(comb_size, -1, err_msg='Unprocessed combinations left')
-    return comb_masks
 
 def take_by_masks(data: np.array, masks: np.array):
     """Extract elements by masking the last dimension, keeping the mask's shape"""
@@ -246,38 +93,27 @@ def det_sum_split(products: np.array, odd_masks: np.array) -> np.array:
     # Then add the remainder from even or odd ones
     return res + even_res[..., comm_size:].sum(-1) - odd_res[..., comm_size:].sum(-1)
 
-def det_minors_of_masks(det_of_masks: callable, comb_masks: np.array, row_base: int, *,
+def det_minors_of_masks(det_of_masks: callable, start_comb: combinatorics.combination, row_base: int, *,
         num_rows: int, minors: np.array or None = None,
         max_det_size: int = MAX_DET_SIZE, det_sum: callable = det_sum_simple) -> np.array:
     """Minor determinants built on top of combinations of sub-matrices"""
+    ###HACK:
+    if row_base == 0:
+        start_comb._bool_mask = start_comb._bool_mask[0]
+    ###
     # Split each determinant into multiple minor-determinants (from sub-matrices):
     row_step = max_det_size
     while row_base < num_rows:
         if row_step >= num_rows - row_base:
             row_step = num_rows - row_base
         # Limit row step, to avoid too large intermediate arrays
-        if ARR_THRESHOLD < comb_masks.size * np.math.comb(comb_masks.shape[-1] - row_base, row_step):
+        if ARR_THRESHOLD < start_comb.count * np.math.comb(start_comb.size - row_base, row_step):
             row_step = 1
-        # Optimization: simplified right-side masks selection for the final row(s)
-        if row_base + row_step < comb_masks.shape[-1]:
-            # Next combinations, based on the remainders from current ones
-            masks = combinations_masks(comb_masks.shape[-1] - row_base, row_step)
-            if minors is not None:
-                masks = np.broadcast_to(masks[np.newaxis,...], minors.shape[-1:] + masks.shape)
-
-            # Masks for the right-side elements:
-            # the next combinations spread over the current remainders
-            r_masks = ~comb_masks
-            # Extra pre-last dimension for each right-side combination
-            r_masks = np.stack((r_masks,) * masks.shape[-2], axis=-2)
-            r_masks[r_masks] = masks.flat
-            del masks
-        else:
-            # Final row(s), right-side masks are just the left-overs
-            r_masks = ~comb_masks[...,np.newaxis,:]
+        # Next combinations, based on the remainders from current ones
+        start_comb, rem_comb = start_comb.remainder_combination(row_step)
 
         # Calculate the next minors
-        r_minors = det_of_masks(r_masks, row_base,
+        r_minors = det_of_masks(rem_comb.to_bool_mask(), row_base,
                 max_det_size=max_det_size, det_sum=det_sum)
         if minors is not None:
             minors = (minors[...,np.newaxis] * r_minors).reshape(minors.shape[:-1] + (-1,))
@@ -286,26 +122,28 @@ def det_minors_of_masks(det_of_masks: callable, comb_masks: np.array, row_base: 
         del r_minors
 
         # Calculate the next combination masks and parity
-        comb_masks = comb_masks[...,np.newaxis,:]
-        odd_masks = combinations_parity(comb_masks, r_masks).flatten()
-        comb_masks = (comb_masks | r_masks).reshape(-1, comb_masks.shape[-1])
-        del r_masks
+        odd_masks = start_comb.combinations_parity(rem_comb).flatten()
+        start_comb = start_comb.merge(rem_comb)
+        del rem_comb
 
         # Build remap-xform matrix to sum the duplicate combinations (identify overlaps)
-        if not comb_masks.all():
-            comb_idxs = combinations_to_indices(comb_masks)
+        if not start_comb.is_singular():
+            comb_idxs = start_comb.to_comb_index()
             expected_dups = np.math.comb(row_base + row_step, row_step)
-            remap_idxs = np.argsort(comb_idxs).reshape(-1, expected_dups)
+            remap_idxs = np.argsort(comb_idxs, axis=None).reshape(-1, expected_dups)
             del comb_idxs
         else:
             # Final row(s), all combinations overlap
-            remap_idxs = np.arange(comb_masks.shape[-2])
+            remap_idxs = np.arange(start_comb.count)
 
         # Drop the duplicated combimations - the remap places them in the pre-last dimension
+        comb_masks = start_comb.to_bool_mask()
+        comb_masks = comb_masks.reshape(-1, comb_masks.shape[-1])
         if ASSERT_LEVEL > 3:
             np.testing.assert_equal(comb_masks[remap_idxs[...,1:]], comb_masks[remap_idxs[...,:-1]],
                     err_msg='Unable to isolate "comb_masks" duplicates')
-        comb_masks = comb_masks[remap_idxs[...,0]]
+        start_comb = combinatorics.combination_bools.from_bool_mask(comb_masks[remap_idxs[...,0]])
+        del comb_masks
 
         # Apply determinant rule: sum the products by negating the odd-permutations
         minors = minors[...,remap_idxs]
@@ -315,7 +153,7 @@ def det_minors_of_masks(det_of_masks: callable, comb_masks: np.array, row_base: 
 
         row_base += row_step
 
-    return minors, comb_masks
+    return minors, start_comb
 
 def det_of_columns(take_data: callable, col_idxs: np.array, row_base: int, *,
         max_det_size: int = MAX_DET_SIZE, det_sum: callable = det_sum_simple) -> np.array:
@@ -338,17 +176,17 @@ def det_of_columns(take_data: callable, col_idxs: np.array, row_base: int, *,
     # Calculate only the determinants, that are small enough
     if col_idxs.shape[-1] <= max_det_size:
         # Combine all permutations in a single array
-        idxs = permutations_indices(col_idxs.shape[-1])
-        perms = col_idxs[..., idxs]
+        perm = combinatorics.permutation(col_idxs.shape[-1])
+        col_idxs = col_idxs[..., perm.to_indices()]
 
-        res = take_data(perms, row_base)
-        del perms
+        res = take_data(col_idxs, row_base)
+        del col_idxs
         # Apply determinant rule: products from permutations
         res = res.prod(-1)
 
         # Get the permutation parity
-        odd_masks = permutation_parity(idxs)
-        del idxs
+        odd_masks = perm.permutation_parity()
+        del perm
 
         # Apply determinant rule: sum the products by negating the odd-permutations
         return det_sum(res, odd_masks)
@@ -359,7 +197,7 @@ def det_of_columns(take_data: callable, col_idxs: np.array, row_base: int, *,
                 max_det_size=max_det_size, det_sum=det_sum)
     # Build on top of empty initial (left-side) minors
     num_rows = col_idxs.shape[-1]
-    minors, _ = det_minors_of_masks(det_of_masks, np.full(num_rows, False), row_base,
+    minors, _ = det_minors_of_masks(det_of_masks, combinatorics.combination_bools(num_rows, 0), row_base,
             num_rows=num_rows, max_det_size=max_det_size, det_sum=det_sum)
     return minors
 
@@ -408,7 +246,7 @@ def det_minors(data: np.array, *, max_det_size: int = MAX_DET_SIZE) -> np.array:
                 max_det_size=max_det_size, det_sum=det_sum)
 
     # Build on top of empty initial (left-side) minors
-    minors, masks = det_minors_of_masks(det_of_masks, np.full(data.shape[-1], False), 0,
+    minors, combs = det_minors_of_masks(det_of_masks, combinatorics.combination_bools(data.shape[-1], 0), 0,
             num_rows=data.shape[-2], max_det_size=max_det_size)
-    odd_masks = combinations_parity(masks)
+    odd_masks = combs.combinations_parity()
     return np.negative(minors, out=minors, where=odd_masks)
