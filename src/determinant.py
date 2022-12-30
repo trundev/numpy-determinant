@@ -155,19 +155,19 @@ def take_data_matrix(data: np.array, col_idxs: np.array, row_base: int) -> np.ar
     """
     return data[..., np.arange(col_idxs.shape[-1]) + row_base, col_idxs]
 
-def take_data_numwall(data: np.array, num_rows: int, num_dets: int or None,
+def take_data_toeplitz(data: np.array, num_rows: int, num_dets: int or None,
         col_idx: np.array, row_base: int) -> np.array:
-    """Callback to convert data to number-wall style matrix
+    """Callback to convert data to Toeplitz matrix: https://en.wikipedia.org/wiki/Toeplitz_matrix
 
     Parameters
     ----------
     num_rows : int
-        Number of rows in the topmost number-wall matrix
+        Number of rows in the topmost Toeplitz matrix
     num_dets : int or None
-        Number of sequential determinants to be returned (for parallel processing)
+        Number of sequential matrices to be returned (for parallel processing)
     - Others: see take_data_matrix()
     """
-    # Convert indices using the number-wall style data-order
+    # Convert indices using the Toeplitz matrix data-order
     col_idx += num_rows - 1 - (np.arange(col_idx.shape[-1]) + row_base)
     if num_dets is not None:
         # Retrieve data for multiple determinants starting at each possible index
