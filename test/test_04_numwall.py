@@ -180,3 +180,35 @@ def test_sine():
     print(f'Sine wave: {data}')
     res = numwall_decomposition(data, degree)
     print()
+
+def test_sum_of_powers():
+    r"""Decompose sum of powers of a constatnt(?)
+
+    The goal is to decompose sequence: 750, 21, 264, 183, 210
+    which is: 750, 750-3^6, 750-3^6+3^5, 750-3^6+3^5-3^4, 750-3^6+3^5-3^4+3^3
+    Expressed as sum, but in reverse:
+        3(68 - \sum_{n=0}^{x-2}(-3)^{n}
+    I.e.:
+        3 * (68 - np.add.accumulate((-3)**np.arange(7)))
+    """
+    degree = 2
+
+    base = -3
+    t = np.arange(1 + 2*degree)
+
+    data = 3 * (68 - np.add.accumulate(base ** t))
+    print(f'Sum of powers of {base}: {data}')
+    res = numwall_decomposition(data, degree)
+    print()
+
+def test_reciprocal():
+    """Decompose reciprocal function(?)"""
+    degree = 4
+
+    t = np.arange(2 + 2*degree, dtype=complex) + 1
+
+    data = 1/t
+    print(f'Simple reciprocal: {data}')
+    #FIXME: Hand-picked round_roots
+    res = numwall_decomposition(data, degree, round_roots=14)
+    print()
