@@ -1,3 +1,18 @@
-[build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
+[project]
+name = "numpy_determinant"
+version = "0.0.1"
+description = "Generic NumPy determinant calculator"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Environment :: Console",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Development Status :: 1 - Planning",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+# Development deps, installed through `pip install .[dev]`
+dev = ["pytest"]

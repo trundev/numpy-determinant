@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
  # Module to be tested
-import determinant
+from numpy_determinant import determinant
 determinant.ASSERT_LEVEL = 5    # Keep all internal tests on
 
 

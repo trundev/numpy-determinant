@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         os: [windows-latest]
-        python-version: ['3.11', '3.8']
+        python-version: ['3.13', '3.10']
       fail-fast: false
 
     runs-on: ${{ matrix.os }}
@@ -22,10 +22,10 @@ jobs:
       with:
         python-version: "${{ matrix.python-version }}"
 
-    - name: Install minimal requirements (numpy and pytest)
+    - name: Install module and development deps
       run: |
         python -m pip install --upgrade pip
-        python -m pip install pytest numpy
+        pip install .[dev]
 
     - name: Run PyTest
       run: pytest --capture=tee-sys
@@ -43,7 +43,7 @@ jobs:
       uses: actions/setup-python@v4
       with:
         # Arbitrary python version
-        python-version: '3.11'
+        python-version: '3.13'
 
     - name: Install module from GitHub (${{ env.PIP_NAME }})
       run: python -m pip install "${{ env.PIP_NAME }}"
