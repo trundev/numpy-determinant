@@ -34,16 +34,24 @@ def test_permutation_parity(size):
     np.testing.assert_equal(odd_mask, ref_perm_parity(perm_idxs),
                             err_msg='Wrong optimized permutation parity')
 
+def combinations_masks(size, comb_size):
+    """Helper to recombine "batched" data returned by determinant.combinations_masks()"""
+    comb_mask = np.empty((0, size), dtype=bool)
+    for masks in determinant.combinations_masks(size, comb_size,
+                max_batch=determinant.MAX_COMBINATION_BATCH):
+        comb_mask = np.append(comb_mask, masks, axis=0)
+    return comb_mask
+
 @pytest.mark.parametrize('size', range(1, 8))
 def test_combinations_parity(size):
     """Test the vectorized combination-parity implementation vs the slow reference one"""
     for comb_size in range(1, size + 1):
-        comb_mask = determinant.combinations_masks(size, comb_size)
+        comb_mask = combinations_masks(size, comb_size)
         # Try remainder masks of various sizes (including full coverage)
         for rem_size in range(size - comb_size + 1):
             if rem_size:
                 # Select some remainder-combination masks
-                mask = determinant.combinations_masks(size - comb_size, rem_size)
+                mask = combinations_masks(size - comb_size, rem_size)
                 rem_mask = ~comb_mask
                 rem_mask[rem_mask] = np.take(mask, np.arange(rem_mask.shape[0]),
                                              0, mode='wrap').flat

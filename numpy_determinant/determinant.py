@@ -6,7 +6,7 @@ The main goal is to work with NumPy array of any `dtype`, like:
 The `determinant.det()` should work just like `numpy.linalg.det()`, with preserved `dtype`.
 """
 import itertools
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 import numpy as np
 import numpy.typing as npt
 
@@ -16,6 +16,10 @@ import numpy.typing as npt
 #   like: "1e6**3 + 1 - 1e6**3 == 0"
 # - Better performance
 MAX_DET_SIZE = 3
+
+# Limit the number of combinations in each batch returned by `combinations_masks()`,
+# which reduces the determinant components calculated in parallel, i.e. consumed memory.
+MAX_COMBINATION_BATCH = 1000
 
 ASSERT_LEVEL = 1
 
@@ -91,19 +95,23 @@ def combinations_parity(comb_mask: MaskArray, rem_mask: MaskArray|None = None) -
     odd_mask[~comb_mask] = False
     return np.logical_xor.reduce(odd_mask, axis=-1)
 
-def combinations_masks(size: int, comb_size: int) -> MaskArray:
-    """Obtain all combinations for specific number range
+def combinations_masks(size: int, comb_size: int, *, max_batch: int) -> Iterator[MaskArray]:
+    """Obtain all combinations for specific number range in batches
 
     Note: The returned mask can be inverted to get the remainder from combination"""
     if comb_size == 1:
-        return np.identity(size, dtype=bool)
+        yield np.identity(size, dtype=bool)
+        return
     if comb_size == size - 1:
-        return ~np.identity(size, dtype=bool)[::-1]
-    idxs = np.fromiter(itertools.combinations(range(size), comb_size),
-            dtype=(IndexType, [comb_size]))
-    masks = np.zeros(shape=(idxs.shape[0], size), dtype=bool)
-    masks[np.arange(idxs.shape[0])[...,np.newaxis], idxs] = True
-    return masks
+        yield ~np.identity(size, dtype=bool)[::-1]
+        return
+    # Mimic the behavior of `itertools.batched()` for Python 3.10 compatibility
+    it = itertools.combinations(range(size), comb_size)
+    while (idxs := np.fromiter(itertools.islice(it, max_batch),
+                               dtype=(IndexType, comb_size))).size:
+        masks = np.zeros(shape=(idxs.shape[0], size), dtype=bool)
+        masks[np.arange(idxs.shape[0])[...,np.newaxis], idxs] = True
+        yield masks
 
 def take_by_masks(data: DataArray, masks: MaskArray):
     """Extract elements by masking the last dimension, keeping the mask's shape"""
@@ -182,22 +190,23 @@ def det_sum_split(products: DataArray, odd_masks: MaskArray) -> DataArray:
 def det_minors_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_base: int, *,
         minor_size: int, left_only=False,
         max_det_size: int = MAX_DET_SIZE, det_sum: Callable = det_sum_simple
-        ) -> tuple[DataArray, Optional[DataArray], MaskArray]:
+        ) -> Iterator[tuple[DataArray, Optional[DataArray], MaskArray]]:
     """Minor determinants of all combinations of sub-matrices, return left and/or right ones"""
     # Represent the sub-matrix combinations as masks to easily switch from left to right side
-    masks = combinations_masks(col_idxs.shape[-1], minor_size)
-    # Calculate left-side minors
-    res = det_of_columns(take_data, take_by_masks(col_idxs, masks),
-            row_base, max_det_size=max_det_size, det_sum=det_sum)
-    if left_only:
-        res = res, None
-    else:
-        # Calculate right-side minors (optional)
-        res = res, det_of_columns(take_data, take_by_masks(col_idxs, ~masks),
-                row_base + minor_size, max_det_size=max_det_size, det_sum=det_sum)
+    for masks in combinations_masks(col_idxs.shape[-1], minor_size,
+                                    max_batch=MAX_COMBINATION_BATCH):
+        # Calculate left-side minors
+        res = det_of_columns(take_data, take_by_masks(col_idxs, masks),
+                row_base, max_det_size=max_det_size, det_sum=det_sum)
+        if left_only:
+            res = res, None
+        else:
+            # Calculate right-side minors (optional)
+            res = res, det_of_columns(take_data, take_by_masks(col_idxs, ~masks),
+                    row_base + minor_size, max_det_size=max_det_size, det_sum=det_sum)
 
-    # Third element is the parity of combination
-    return *res, combinations_parity(masks)
+        # Third element is the parity of combination
+        yield *res, combinations_parity(masks)
 
 def det_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_base: int, *,
         max_det_size: int = MAX_DET_SIZE, det_sum: Callable = det_sum_simple) -> DataArray:
@@ -230,20 +239,27 @@ def det_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_b
 
         # Get the permutation parity
         odd_masks = permutation_parity(idxs)
-        del idxs
-    else:
-        # Split each determinant into two minor-determinants (from sub-matrices):
-        # main (left-side) minor and remainder (right-size) minor
-        split = (col_idxs.shape[-1] + 1) // 2
-        minors, r_minors, odd_masks = det_minors_of_columns(take_data, col_idxs, row_base,
-                minor_size = split, left_only=False,
-                max_det_size=max_det_size, det_sum=det_sum)
-        # Apply determinant rule: products from sub-determinants
-        res = minors * r_minors
-        del minors, r_minors
+        # Apply determinant rule: sum the products by negating the odd-permutations
+        return det_sum(res, odd_masks)
 
-    # Apply determinant rule: sum the products by negating the odd-permutations
-    return det_sum(res, odd_masks)
+    # Split each determinant into two minor-determinants (from sub-matrices):
+    # main (left-side) minor and remainder (right-size) minor
+    det_res = None  # We still don't know the type of the result
+    split = (col_idxs.shape[-1] + 1) // 2
+    for minors, r_minors, odd_masks in det_minors_of_columns(take_data, col_idxs, row_base,
+            minor_size = split, left_only=False,
+            max_det_size=max_det_size, det_sum=det_sum):
+        # Apply determinant rules:
+        # - products from sub-determinants
+        # - sum the products by negating the odd-permutations
+        res = det_sum(minors * r_minors, odd_masks)
+        # Accumulate result from batches of minor determinants
+        if det_res is None:
+            det_res = res
+        else:
+            det_res = det_sum(np.stack((det_res, res), axis=-1), False)
+    assert det_res is not None, 'Internal logic error'
+    return det_res
 
 def det(data: DataArray, *, max_det_size: int = MAX_DET_SIZE) -> DataArray:
     """Compute the determinant of an array - our version of `numpy.linalg.det()`
@@ -283,8 +299,13 @@ def det_minors(data: DataArray, *, max_det_size: int = MAX_DET_SIZE) -> DataArra
 
     def take_data(col_idxs, row_base):
         return take_data_matrix(data, col_idxs, row_base)
-    res, _, odd_masks = det_minors_of_columns(take_data,
+    # Process minor determinants by batches
+    det_res = np.empty(data.shape[:-2] + (0,), dtype=data.dtype)
+    for res, _, odd_masks in det_minors_of_columns(take_data,
             np.arange(data.shape[-1], dtype=IndexType), 0,
             minor_size=data.shape[-2], left_only=True,
-            max_det_size=max_det_size)
-    return np.negative(res, out=res, where=odd_masks)
+            max_det_size=max_det_size):
+        # Recombine result from batches of minor determinants
+        np.negative(res, out=res, where=odd_masks)
+        det_res = np.append(det_res, res, axis=-1)
+    return det_res
