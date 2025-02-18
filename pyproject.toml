@@ -15,7 +15,7 @@ dependencies = ["numpy"]
 
 [project.optional-dependencies]
 # Development deps, installed through `pip install .[dev]`
-dev = ["pytest"]
+dev = ["pytest", "pytest-benchmark"]
 
 [tool.pytest.ini_options]
 markers = [

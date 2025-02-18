@@ -119,10 +119,11 @@ def test_det_minors():
     np.testing.assert_equal(res, 0, err_msg='Non-zero determinant from linearly dependent vectors')
 
 # Range the matrix sizes, start at empty one (0x0)
+@pytest.mark.parametrize('max_det_size', range(2,10))
 @pytest.mark.parametrize('degree', (
         size if size < 16 else pytest.param(size, marks=pytest.mark.slow)
         for size in range(18 + 1)))
-def test_range_size(degree):
+def test_range_size(benchmark, degree, max_det_size, ):
     """Test determinants from range of matrix sizes"""
     print(f'\n* Determinant of matrix of {degree} degree')
 
@@ -140,6 +141,6 @@ def test_range_size(degree):
     # we can just round it to get the exact value
     ref_res = np.round(np.linalg.det(data))
     assert (ref_res != 0).all(), 'Must select non-linearly dependent data'
-    res = determinant.det(data)
+    res = benchmark(determinant.det, data, max_det_size=max_det_size)
     np.testing.assert_equal(res, ref_res,
                             err_msg='Determinant value does not match the reference')
