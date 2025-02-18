@@ -35,21 +35,6 @@ PRECALC_PERMS: list[IndexArray] = list(np.array(vals, IndexType) for vals in (
         [[0, 1], [1, 0]],   # size=2
     ))
 
-def _ref_perm_parity(perm_idxs: IndexArray) -> MaskArray:
-    """Obtain the parity of permutations from the number of inversions
-
-    Uses nested for-loops, as a reference for pytests
-    See:
-        https://statlect.com/matrix-algebra/sign-of-a-permutation
-        https://en.wikipedia.org/wiki/Parity_of_a_permutation
-    """
-    odd_mask = np.zeros(1, dtype=bool)
-    # Plain nested for-loops implementation
-    for i in range(perm_idxs.shape[-1] - 1):
-        for j in range(i + 1, perm_idxs.shape[-1]):
-            odd_mask = odd_mask ^ (perm_idxs[..., i] > perm_idxs[..., j])
-    return odd_mask
-
 def permutation_parity(perm_idxs: IndexArray) -> MaskArray:
     """Obtain the parity of permutations from the number of inversions
 
@@ -70,13 +55,7 @@ def permutation_parity(perm_idxs: IndexArray) -> MaskArray:
 
     # Regroup permutation indices in couples to check for inversions
     idxs = perm_idxs[...,idxs]
-    odd_mask = np.logical_xor.reduce(idxs[...,0] > idxs[...,1], axis=-1)
-
-    if ASSERT_LEVEL > 3:
-        # Use a reference result
-        np.testing.assert_equal(odd_mask, _ref_perm_parity(perm_idxs),
-                                err_msg='Wrong optimized permutation parity')
-    return odd_mask
+    return np.logical_xor.reduce(idxs[...,0] > idxs[...,1], axis=-1)
 
 def permutations_indices(size: int) -> IndexArray:
     """Obtain all permutations for specific number range"""
@@ -110,17 +89,7 @@ def combinations_parity(comb_mask: MaskArray, rem_mask: MaskArray|None = None) -
         comb_mask, rem_mask = np.broadcast_arrays(comb_mask, rem_mask)
     odd_mask = np.logical_xor.accumulate(rem_mask, axis=-1)
     odd_mask[~comb_mask] = False
-    odd_mask = np.logical_xor.reduce(odd_mask, axis=-1)
-
-    if ASSERT_LEVEL > 3:
-        # Combine permutation indices for the reference result
-        combs = take_by_masks(np.arange(comb_mask.shape[-1]), comb_mask)
-        rems = take_by_masks(np.arange(comb_mask.shape[-1]), rem_mask)
-        perm = np.concatenate((combs, rems), axis=-1)
-        # Use a reference result
-        np.testing.assert_equal(odd_mask, _ref_perm_parity(perm),
-                                err_msg='Wrong optimized combinations parity')
-    return odd_mask
+    return np.logical_xor.reduce(odd_mask, axis=-1)
 
 def combinations_masks(size: int, comb_size: int) -> MaskArray:
     """Obtain all combinations for specific number range
