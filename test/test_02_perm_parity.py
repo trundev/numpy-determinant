@@ -37,8 +37,8 @@ def test_permutation_parity(size):
 def combinations_masks(size, comb_size):
     """Helper to recombine "batched" data returned by determinant.combinations_masks()"""
     comb_mask = np.empty((0, size), dtype=bool)
-    for masks in determinant.combinations_masks(size, comb_size,
-                max_batch=determinant.MAX_COMBINATION_BATCH):
+    # `max_batch=30` splits combinations when `size=7` and `comb_size=3`
+    for masks in determinant.combinations_masks(size, comb_size, max_batch=30):
         comb_mask = np.append(comb_mask, masks, axis=0)
     return comb_mask
 

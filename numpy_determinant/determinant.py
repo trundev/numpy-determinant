@@ -5,6 +5,7 @@ The main goal is to work with NumPy array of any `dtype`, like:
   fractions, decimal, numbers, `numpy.polynomial.Polynomial`, etc.
 The `determinant.det()` should work just like `numpy.linalg.det()`, with preserved `dtype`.
 """
+import math
 import itertools
 from typing import Callable, Iterator, Optional
 import numpy as np
@@ -17,9 +18,9 @@ import numpy.typing as npt
 # - Better performance
 MAX_DET_SIZE = 3
 
-# Limit the number of combinations in each batch returned by `combinations_masks()`,
-# which reduces the determinant components calculated in parallel, i.e. consumed memory.
-MAX_COMBINATION_BATCH = 1000
+# Limit the number of matrix elements retrieved/processed at once, in order to avoid
+# allocation of huge intermediate arrays.
+LIMIT_TAKE_DATA = 800_000_000   # Need ~8 GiB for `np.int64` data
 
 ASSERT_LEVEL = 1
 
@@ -187,14 +188,26 @@ def det_sum_split(products: DataArray, odd_masks: MaskArray) -> DataArray:
     # Then add the remainder from even or odd ones
     return res + even_res[..., comm_size:].sum(-1) - odd_res[..., comm_size:].sum(-1)
 
+def estimate_take_data_size(size: int, max_det_size: int) -> int:
+    """Estimate number of items, retrieved by current algorithm for a matrix size"""
+    comb_size = math.perm(size) * max_det_size
+    while size > max_det_size:
+        size //= 2
+        comb_size //= math.perm(size)
+    return comb_size
+
 def det_minors_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_base: int, *,
         minor_size: int, left_only=False,
         max_det_size: int = MAX_DET_SIZE, det_sum: Callable = det_sum_simple
         ) -> Iterator[tuple[DataArray, Optional[DataArray], MaskArray]]:
     """Minor determinants of all combinations of sub-matrices, return left and/or right ones"""
+    limit_take_data = LIMIT_TAKE_DATA
+    # Select `max_batch` so items taken in a single step, do not to exceed `limit_take_data`
+    max_batch = limit_take_data // (np.prod(col_idxs.shape[:-1], dtype=int)
+                                    * estimate_take_data_size(minor_size, max_det_size))
+    max_batch += max_batch == 0     # Need at-least one batch
     # Represent the sub-matrix combinations as masks to easily switch from left to right side
-    for masks in combinations_masks(col_idxs.shape[-1], minor_size,
-                                    max_batch=MAX_COMBINATION_BATCH):
+    for masks in combinations_masks(col_idxs.shape[-1], minor_size, max_batch=max_batch):
         # Calculate left-side minors
         res = det_of_columns(take_data, take_by_masks(col_idxs, masks),
                 row_base, max_det_size=max_det_size, det_sum=det_sum)
