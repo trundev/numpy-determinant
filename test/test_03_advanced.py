@@ -1,5 +1,6 @@
 """Test advanced determinant calculation options"""
 import numpy as np
+import pytest
 
  # Module to be tested
 from numpy_determinant import determinant
@@ -175,3 +176,23 @@ def test_polynomials():
     res = determinant.det(data)
     assert isinstance(res.flat[0], np.polynomial.Polynomial), 'Determiant data-type was changed'
     np.testing.assert_equal(res, ref_res, err_msg='Unexpected polynomial result')
+
+@pytest.mark.parametrize('limit', (20, 100, 1000))
+def test_limit_take_data(limit):
+    """Test if 'limit_take_data' is not exceeded"""
+    # Matrix of large enough degree to trigger the limit
+    degree = 8
+    data = np.arange(degree * degree).reshape(degree, degree)
+
+    max_take_data_size = 0
+    # This is `determinant.det()`, but using a custom 'take_data' callback
+    def take_data(col_idxs, *args):
+        """Monitor number of elements taken at once"""
+        assert np.prod(col_idxs.shape) < limit, \
+                f"Exceed 'limit_take_data': {np.prod(col_idxs.shape)} / {limit}"
+        nonlocal max_take_data_size
+        max_take_data_size = max(max_take_data_size, np.prod(col_idxs.shape))
+        return determinant.take_data_matrix(data, col_idxs, *args)
+    determinant.det_of_columns(take_data, np.arange(data.shape[-1]), 0, limit_take_data=limit)
+    assert max_take_data_size > limit * .45, \
+            f'Too few element were taken at once: {max_take_data_size}'

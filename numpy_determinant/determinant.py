@@ -188,41 +188,39 @@ def det_sum_split(products: DataArray, odd_masks: MaskArray) -> DataArray:
     # Then add the remainder from even or odd ones
     return res + even_res[..., comm_size:].sum(-1) - odd_res[..., comm_size:].sum(-1)
 
-def estimate_take_data_size(size: int, max_det_size: int) -> int:
+def estimate_take_data_size(size: int) -> int:
     """Estimate number of items, retrieved by current algorithm for a matrix size"""
-    comb_size = math.perm(size) * max_det_size
-    while size > max_det_size:
+    comb_size = math.perm(size) * MAX_DET_SIZE
+    while size > MAX_DET_SIZE:
         size //= 2
         comb_size //= math.perm(size)
     return comb_size
 
 def det_minors_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_base: int, *,
-        minor_size: int, left_only=False,
-        max_det_size: int = MAX_DET_SIZE, det_sum: Callable = det_sum_simple
-        ) -> Iterator[tuple[DataArray, Optional[DataArray], MaskArray]]:
+        minor_size: int, limit_take_data: int = LIMIT_TAKE_DATA, left_only=False,
+        **kwargs) -> Iterator[tuple[DataArray, Optional[DataArray], MaskArray]]:
     """Minor determinants of all combinations of sub-matrices, return left and/or right ones"""
-    limit_take_data = LIMIT_TAKE_DATA
     # Select `max_batch` so items taken in a single step, do not to exceed `limit_take_data`
     max_batch = limit_take_data // (np.prod(col_idxs.shape[:-1], dtype=int)
-                                    * estimate_take_data_size(minor_size, max_det_size))
+                                    * estimate_take_data_size(minor_size))
     max_batch += max_batch == 0     # Need at-least one batch
     # Represent the sub-matrix combinations as masks to easily switch from left to right side
     for masks in combinations_masks(col_idxs.shape[-1], minor_size, max_batch=max_batch):
         # Calculate left-side minors
         res = det_of_columns(take_data, take_by_masks(col_idxs, masks),
-                row_base, max_det_size=max_det_size, det_sum=det_sum)
+                row_base, limit_take_data=limit_take_data, **kwargs)
         if left_only:
             res = res, None
         else:
             # Calculate right-side minors (optional)
             res = res, det_of_columns(take_data, take_by_masks(col_idxs, ~masks),
-                    row_base + minor_size, max_det_size=max_det_size, det_sum=det_sum)
+                   row_base + minor_size, limit_take_data=limit_take_data, **kwargs)
 
         # Third element is the parity of combination
         yield *res, combinations_parity(masks)
 
 def det_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_base: int, *,
-        max_det_size: int = MAX_DET_SIZE, det_sum: Callable = det_sum_simple) -> DataArray:
+        det_sum: Callable = det_sum_simple, **kwargs) -> DataArray:
     """Matrix determinant calculation on given combinations of indices
 
     Parameters
@@ -234,13 +232,13 @@ def det_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_b
     row_base : int
         Index of fist row to calculate determinant, the number of rows is
         `col_idxs.shape[-1]`
-    max_det_size : int, optional
-        Max size of intermediate sub-matrices to avoid overflows
+    limit_take_data : int, optional
+        Max number of matrix elements processed at once, to avoid memory starvation
     det_sum : function(V, M) -> (S)
         Callback to do the final determinant sum, see det_sum_simple()
     """
     # Calculate only the determinants, that are small enough
-    if col_idxs.shape[-1] <= max_det_size:
+    if col_idxs.shape[-1] <= MAX_DET_SIZE:
         # Combine all permutations in a single array
         idxs = permutations_indices(col_idxs.shape[-1])
         perms = col_idxs[..., idxs]
@@ -260,8 +258,7 @@ def det_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_b
     det_res = None  # We still don't know the type of the result
     split = (col_idxs.shape[-1] + 1) // 2
     for minors, r_minors, odd_masks in det_minors_of_columns(take_data, col_idxs, row_base,
-            minor_size = split, left_only=False,
-            max_det_size=max_det_size, det_sum=det_sum):
+            minor_size = split, left_only=False, det_sum=det_sum, **kwargs):
         # Apply determinant rules:
         # - products from sub-determinants
         # - sum the products by negating the odd-permutations
@@ -274,15 +271,17 @@ def det_of_columns(take_data: Callable, col_idxs: npt.NDArray[np.integer], row_b
     assert det_res is not None, 'Internal logic error'
     return det_res
 
-def det(data: DataArray, *, max_det_size: int = MAX_DET_SIZE) -> DataArray:
+def det(data: DataArray, **kwargs) -> DataArray:
     """Compute the determinant of an array - our version of `numpy.linalg.det()`
 
     Parameters
     ----------
     data : (..., M, M) array_like
         Input array to compute determinants for.
-    max_det_size : int, optional
-        Max size of intermediate sub-matrices to avoid overflows
+    limit_take_data : int, optional
+        Max number of matrix elements processed at once, to avoid memory starvation
+    det_sum : function(V, M) -> (S)
+        Callback to do the final determinant sum, see det_sum_simple()
 
     Returns
     -------
@@ -294,10 +293,9 @@ def det(data: DataArray, *, max_det_size: int = MAX_DET_SIZE) -> DataArray:
 
     def take_data(col_idxs, row_base):
         return take_data_matrix(data, col_idxs, row_base)
-    return det_of_columns(take_data, np.arange(data.shape[-1], dtype=IndexType), 0,
-            max_det_size=max_det_size)
+    return det_of_columns(take_data, np.arange(data.shape[-1], dtype=IndexType), 0, **kwargs)
 
-def det_minors(data: DataArray, *, max_det_size: int = MAX_DET_SIZE) -> DataArray:
+def det_minors(data: DataArray, **kwargs) -> DataArray:
     """Compute the minor determinants of an array
 
     Parameters
@@ -316,8 +314,7 @@ def det_minors(data: DataArray, *, max_det_size: int = MAX_DET_SIZE) -> DataArra
     det_res = np.empty(data.shape[:-2] + (0,), dtype=data.dtype)
     for res, _, odd_masks in det_minors_of_columns(take_data,
             np.arange(data.shape[-1], dtype=IndexType), 0,
-            minor_size=data.shape[-2], left_only=True,
-            max_det_size=max_det_size):
+            minor_size=data.shape[-2], left_only=True, **kwargs):
         # Recombine result from batches of minor determinants
         np.negative(res, out=res, where=odd_masks)
         det_res = np.append(det_res, res, axis=-1)

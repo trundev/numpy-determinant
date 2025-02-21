@@ -48,14 +48,14 @@ def test_asserts():
         determinant.take_by_masks(np.zeros_like(masks), masks)
 
     # Complete determinant calculations cause float64 overflows
-    def sample_dets(max_det_size=determinant.MAX_DET_SIZE):
+    def sample_dets(max_det_size):
         degree = 7
         data = np.arange(degree*degree, dtype=float) * 1e3
-        res = determinant.det(data.reshape(degree, degree),
-                max_det_size=max_det_size)
+        determinant.MAX_DET_SIZE = max_det_size
+        res = determinant.det(data.reshape(degree, degree))
         return res
     # Some regular data test
-    res = sample_dets()
+    res = sample_dets(determinant.MAX_DET_SIZE)
     np.testing.assert_allclose(res, 0, err_msg='Non-zero determinant')
     # Same data calculated w/o sub-determinants
     res = sample_dets(10)
@@ -120,7 +120,7 @@ def test_det_minors():
 
 # Range the matrix sizes, start at empty one (0x0)
 @pytest.mark.parametrize('degree', (
-        size if size < 16 else pytest.param(size, marks=pytest.mark.slow)
+        size if size < 17 else pytest.param(size, marks=pytest.mark.slow)
         for size in range(18 + 1)))
 def test_range_size(degree):
     """Test determinants from range of matrix sizes"""
